@@ -192,6 +192,20 @@ async def run():
             if response_text:
                 console.print(Markdown(response_text))
 
+            # Check for generated images (wait a bit for images to render)
+            await asyncio.sleep(2)
+            images = await browser.extract_images()
+            if images:
+                img_dir = state.cwd / "gemini-images"
+                img_dir.mkdir(exist_ok=True)
+                from time import strftime
+                ts = strftime("%Y%m%d-%H%M%S")
+                for i, img_data in enumerate(images, 1):
+                    suffix = ".png" if img_data[:4] == b'\x89PNG' else ".jpg"
+                    fname = img_dir / f"{ts}-{i}{suffix}"
+                    fname.write_bytes(img_data)
+                    console.print(f"[bold cyan]Image saved:[/bold cyan] {fname}")
+
             # In edit mode: detect and apply diffs
             if state.edit_mode and response_text:
                 diffs = [normalize_diff(d, state.cwd) for d in extract_diffs(response_text)]

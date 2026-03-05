@@ -1,5 +1,6 @@
 """Playwright-based Gemini web interface automation."""
 import asyncio
+import base64
 import re
 import shutil
 import tempfile
@@ -8,6 +9,14 @@ from playwright.async_api import async_playwright, BrowserContext, Page
 
 GEMINI_URL = "https://gemini.google.com"
 SYSTEM_CHROMIUM = "/snap/bin/chromium"
+
+
+def _find_chromium() -> str | None:
+    """Return system Chromium path if available, else None (Playwright bundled)."""
+    if Path(SYSTEM_CHROMIUM).exists():
+        return SYSTEM_CHROMIUM
+    alt = shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
+    return alt
 
 
 class GeminiBrowser:
@@ -38,7 +47,8 @@ class GeminiBrowser:
         self._context = await self._playwright.chromium.launch_persistent_context(
             str(self._session_dir),
             headless=headless,
-            executable_path=SYSTEM_CHROMIUM,
+            executable_path=_find_chromium(),
+            accept_downloads=True,
             args=["--disable-blink-features=AutomationControlled"],
         )
         self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
@@ -114,32 +124,98 @@ class GeminiBrowser:
         except Exception:
             pass
 
+    async def _count_images(self, el) -> int:
+        """Count non-trivial images in a response element."""
+        return await self._page.evaluate("""(el) => {
+            let count = 0;
+            for (const img of el.querySelectorAll('img')) {
+                if (img.width >= 50 && !img.src.startsWith('data:image/svg')) count++;
+            }
+            return count;
+        }""", el)
+
     async def stream_response(self):
         """Async generator yielding growing response text until stable."""
-        # Wait until new element appears OR last element text changes (60s timeout)
+        # Wait until new element appears OR last element text/images change (60s timeout)
         for _ in range(120):
             await asyncio.sleep(0.5)
             els = await self._page.query_selector_all("message-content")
-            last_text = await self._get_response_text(els[-1]) if els else ""
             if len(els) > self._response_count:
                 break
-            if els and last_text != self._last_response_text:
-                break
+            if els:
+                last_text = await self._get_response_text(els[-1])
+                if last_text != self._last_response_text:
+                    break
+                img_count = await self._count_images(els[-1])
+                if img_count > 0:
+                    break
         else:
             return
-        # Poll until text is stable
+        # Poll until text and image count are stable
         prev, stable = "", 0
+        prev_imgs = 0
         while stable < 3:
             await asyncio.sleep(0.5)
             els = await self._page.query_selector_all("message-content")
             current = await self._get_response_text(els[-1]) if els else ""
-            if current and current != prev:
-                yield current
+            cur_imgs = await self._count_images(els[-1]) if els else 0
+            if (current and current != prev) or cur_imgs != prev_imgs:
+                if current:
+                    yield current
                 stable = 0
-            elif current:
+            elif current or cur_imgs > 0:
                 stable += 1
             prev = current
+            prev_imgs = cur_imgs
         self._response_count = len(els)
+
+    async def extract_images(self) -> list[bytes]:
+        """Extract generated images from the last response as raw bytes."""
+        els = await self._page.query_selector_all("message-content")
+        if not els:
+            return []
+        last_el = els[-1]
+        # Find all non-trivial img elements
+        img_urls = await self._page.evaluate("""(el) => {
+            const urls = [];
+            for (const img of el.querySelectorAll('img')) {
+                if (img.width >= 50 && img.src && !img.src.startsWith('data:image/svg'))
+                    urls.push(img.src);
+            }
+            return urls;
+        }""", last_el)
+        if not img_urls:
+            return []
+        # Try full-res download via "Bild in Originalgröße herunterladen" button
+        results = []
+        parent = await self._page.evaluate_handle(
+            "(el) => el.closest('model-response') || el.parentElement?.parentElement || el",
+            last_el,
+        )
+        dl_buttons = await parent.query_selector_all(
+            'button[aria-label="Bild in Originalgröße herunterladen"]'
+        )
+        for btn in dl_buttons:
+            try:
+                async with self._page.expect_download(timeout=30000) as dl_info:
+                    await btn.click()
+                download = await dl_info.value
+                path = await download.path()
+                if path:
+                    results.append(Path(path).read_bytes())
+                    await download.delete()
+            except Exception as e:
+                pass
+        # Fallback: fetch preview images
+        if not results:
+            for url in img_urls:
+                try:
+                    resp = await self._page.request.get(url)
+                    if resp.ok:
+                        results.append(await resp.body())
+                except Exception:
+                    pass
+        return results
 
     async def _open_model_picker(self) -> dict[str, str]:
         """Open model picker, return {mode_id: display_name} for all options."""
