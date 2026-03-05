@@ -1,0 +1,15 @@
+README.md
+pyproject.toml
+geminiwebcli/__init__.py
+geminiwebcli/browser.py
+geminiwebcli/cli.py
+geminiwebcli/commands.py
+geminiwebcli/config.py
+geminiwebcli/context.py
+geminiwebcli.egg-info/PKG-INFO
+geminiwebcli.egg-info/SOURCES.txt
+geminiwebcli.egg-info/dependency_links.txt
+geminiwebcli.egg-info/entry_points.txt
+geminiwebcli.egg-info/requires.txt
+geminiwebcli.egg-info/top_level.txt
+tests/__init__.py

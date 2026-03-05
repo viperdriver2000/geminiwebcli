@@ -1,0 +1,2 @@
+[console_scripts]
+geminiwebcli = geminiwebcli.cli:main

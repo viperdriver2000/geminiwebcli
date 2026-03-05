@@ -1,0 +1,6 @@
+playwright>=1.40
+prompt_toolkit>=3.0
+rich>=13.0
+
+[:python_version < "3.11"]
+tomli>=2.0

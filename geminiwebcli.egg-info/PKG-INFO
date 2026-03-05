@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: geminiwebcli
+Version: 0.1.0
+Summary: CLI tool for Gemini via browser automation
+Requires-Python: >=3.11
+Requires-Dist: playwright>=1.40
+Requires-Dist: prompt_toolkit>=3.0
+Requires-Dist: rich>=13.0
+Requires-Dist: tomli>=2.0; python_version < "3.11"
