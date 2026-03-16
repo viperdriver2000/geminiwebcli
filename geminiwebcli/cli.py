@@ -19,7 +19,7 @@ from geminiwebcli.patch import extract_diffs, normalize_diff, apply_diff
 
 HISTORY_FILE = Path.home() / ".geminiwebcli" / "history"
 SLASH_COMMANDS = [
-    "/upload", "/edit", "/plan", "/apply", "/image", "/batch",
+    "/upload", "/ref", "/edit", "/plan", "/apply", "/image", "/batch",
     "/git", "/run", "/clear", "/history", "/model", "/paste", "/help", "/exit",
 ]
 

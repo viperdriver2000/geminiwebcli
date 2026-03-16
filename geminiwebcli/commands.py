@@ -189,6 +189,7 @@ async def cmd_help(args, state: SessionState, browser) -> str:
         "/edit":                     "Enable edit mode (apply diffs from responses)",
         "/plan":                     "Disable edit mode (keep context)",
         "/apply [-y]":               "EDIT → 'write me a patch!' → apply → PLAN (-y: auto-yes)",
+        "/ref <image-path>":         "Upload reference image for next message",
         "/image <prompt>":           "Send prompt and save generated images",
         "/batch <file.md> [opts]":   "Batch image gen from prompt file (--dry-run, --start-at)",
         "/git <args>":               "Run git command + reload context",
@@ -209,6 +210,23 @@ async def cmd_image(args, state: SessionState, browser) -> str:
     if not args:
         return "Usage: /image <prompt text>\n  Sends the prompt and saves any generated images."
     return "__image__:" + " ".join(args)
+
+
+@command("ref")
+async def cmd_ref(args, state: SessionState, browser) -> str:
+    """Upload a reference image to include with the next message."""
+    if not args:
+        return "Usage: /ref <image-path>\n  Uploads an image as reference for the next message."
+    image_path = Path(" ".join(args)).expanduser()
+    if not image_path.exists():
+        return f"File not found: {image_path}"
+    if not image_path.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
+        return f"Not an image file: {image_path}"
+    try:
+        await browser.upload_image(image_path)
+        return f"Reference image uploaded: {image_path.name}\nType your message — it will be sent together with the image."
+    except Exception as e:
+        return f"Upload failed: {e}"
 
 
 @command("batch")
