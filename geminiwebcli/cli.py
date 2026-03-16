@@ -138,7 +138,9 @@ async def _run_batch(browser, state, filepath: str, raw_input: str):
                 prompts = prompts[i:]
                 break
 
-    img_dir = state.cwd / "gemini-images"
+    # Sub-directory named after the prompt file (e.g. bild-prompts-v2 → gemini-images/bild-prompts-v2/)
+    subdir = Path(filepath).stem
+    img_dir = state.cwd / "gemini-images" / subdir
     total = len(prompts)
     failed = []
 
