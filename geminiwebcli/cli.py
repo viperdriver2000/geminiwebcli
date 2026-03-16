@@ -20,7 +20,7 @@ from geminiwebcli.patch import extract_diffs, normalize_diff, apply_diff
 HISTORY_FILE = Path.home() / ".geminiwebcli" / "history"
 SLASH_COMMANDS = [
     "/upload", "/ref", "/edit", "/plan", "/apply", "/image", "/batch",
-    "/save-images", "/git", "/run", "/clear", "/history", "/model", "/paste", "/help", "/exit",
+    "/gallery", "/save-images", "/git", "/run", "/clear", "/history", "/model", "/paste", "/help", "/exit",
 ]
 
 EDIT_INSTRUCTION = (
@@ -44,6 +44,12 @@ PLAN_INSTRUCTION = (
 PRIME_INSTRUCTION = "Study this project context carefully. When done, reply with just 'OK'."
 
 console = Console()
+
+
+def _image_dir(state) -> Path:
+    """Resolve image output directory from state."""
+    p = Path(state.image_dir).expanduser()
+    return p if p.is_absolute() else state.cwd / p
 
 
 async def _extract_and_save_images(browser, output_dir: Path, filename_prefix: str = "") -> list[Path]:
@@ -126,8 +132,8 @@ async def _save_all_images(browser, state):
     if not all_images:
         console.print("No images found in chat history.")
         return
-    img_dir = state.cwd / "gemini-images"
-    img_dir.mkdir(exist_ok=True)
+    img_dir = _image_dir(state)
+    img_dir.mkdir(parents=True, exist_ok=True)
     ts = strftime("%Y%m%d-%H%M%S")
     total = sum(len(imgs) for _, imgs in all_images)
     n = 0
@@ -168,6 +174,7 @@ async def _run_batch(browser, state, filepath: str, raw_input: str):
     start_at = None
     resume = "--resume" in parts
     max_retries = 1
+    batch_model = None
     if "--start-at" in parts:
         idx = parts.index("--start-at")
         if idx + 1 < len(parts):
@@ -176,10 +183,14 @@ async def _run_batch(browser, state, filepath: str, raw_input: str):
         idx = parts.index("--retries")
         if idx + 1 < len(parts):
             max_retries = int(parts[idx + 1])
+    if "--model" in parts:
+        idx = parts.index("--model")
+        if idx + 1 < len(parts):
+            batch_model = parts[idx + 1]
 
     # Sub-directory named after the prompt file
     subdir = Path(filepath).stem
-    img_dir = state.cwd / "gemini-images" / subdir
+    img_dir = _image_dir(state) / subdir
     progress_file = img_dir / ".batch-progress.json"
     progress = _load_batch_progress(progress_file)
 
@@ -204,11 +215,25 @@ async def _run_batch(browser, state, filepath: str, raw_input: str):
     total = len(prompts)
     failed = []
 
+    # Switch model for batch if requested
+    old_model = None
+    if batch_model:
+        try:
+            display = await browser.select_model(batch_model)
+            old_model = state.model
+            console.print(f"[dim]Batch model: {display}[/dim]")
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not set model {batch_model!r}: {e}[/yellow]")
+
     console.print(f"\n[bold]Batch: {total} prompts[/bold]")
     console.print(f"[bold]Intro: {len(batch.intro)} chars (included in each prompt)[/bold]")
     console.print(f"[bold]Output: {img_dir}[/bold]")
     console.print(f"[bold]Retries: {max_retries}[/bold]\n")
 
+    # Resolve ref images relative to the prompt file's directory
+    prompt_dir = p.parent
+
+    cancelled = False
     for n, pr in enumerate(prompts, 1):
         console.print(f"\n[bold yellow]━━━ [{n}/{total}] {pr.filename} ━━━[/bold yellow]")
         if pr.note:
@@ -228,16 +253,37 @@ async def _run_batch(browser, state, filepath: str, raw_input: str):
 
         # Try with retries
         saved = []
-        for attempt in range(1, max_retries + 1):
-            await browser.new_chat()
-            await asyncio.sleep(1)
+        try:
+            for attempt in range(1, max_retries + 1):
+                await browser.new_chat()
+                await asyncio.sleep(1)
 
-            if attempt > 1:
-                console.print(f"[dim]Retry {attempt}/{max_retries}...[/dim]")
+                if attempt > 1:
+                    console.print(f"[dim]Retry {attempt}/{max_retries}...[/dim]")
 
-            saved = await _send_and_get_images(browser, full_prompt, img_dir, pr.filename)
-            if saved:
-                break
+                # Upload reference image if specified
+                if pr.ref_image:
+                    ref_path = Path(pr.ref_image).expanduser()
+                    if not ref_path.is_absolute():
+                        ref_path = prompt_dir / ref_path
+                    if ref_path.exists():
+                        console.print(f"[dim]Uploading ref: {ref_path.name}[/dim]")
+                        try:
+                            await browser.upload_image(ref_path)
+                        except Exception as e:
+                            console.print(f"[yellow]Ref upload failed: {e}[/yellow]")
+                    else:
+                        console.print(f"[yellow]Ref not found: {ref_path}[/yellow]")
+
+                saved = await _send_and_get_images(browser, full_prompt, img_dir, pr.filename)
+                if saved:
+                    break
+        except KeyboardInterrupt:
+            console.print(f"\n[bold yellow]Batch paused at [{n}/{total}] {pr.filename}[/bold yellow]")
+            _save_batch_progress(progress_file, progress)
+            console.print(f"[dim]Progress saved. Use --resume to continue.[/dim]")
+            cancelled = True
+            break
 
         if saved:
             progress["done"].append(pr.filename)
@@ -252,11 +298,19 @@ async def _run_batch(browser, state, filepath: str, raw_input: str):
         # Save progress after each prompt
         _save_batch_progress(progress_file, progress)
 
+    # Restore original model
+    if old_model:
+        try:
+            await browser.select_model(old_model)
+        except Exception:
+            pass
+
     # Summary
-    console.print(f"\n[bold green]━━━ Batch complete: {total - len(failed)}/{total} successful ━━━[/bold green]")
-    if failed:
-        console.print(f"[bold red]Failed: {', '.join(failed)}[/bold red]")
-        console.print(f"[dim]Run with --resume to retry failed prompts[/dim]")
+    if not cancelled:
+        console.print(f"\n[bold green]━━━ Batch complete: {total - len(failed)}/{total} successful ━━━[/bold green]")
+        if failed:
+            console.print(f"[bold red]Failed: {', '.join(failed)}[/bold red]")
+            console.print(f"[dim]Run with --resume to retry failed prompts[/dim]")
 
 
 async def run():
@@ -279,7 +333,7 @@ async def run():
     file_count = context.count("=== ")
     console.print(f"[dim]{len(context)} chars from {file_count} files[/dim]")
 
-    state = SessionState(model=conf.model, session_context=context, cwd=cwd, system_prompt=conf.system_prompt, run_commands=conf.run_commands)
+    state = SessionState(model=conf.model, session_context=context, cwd=cwd, system_prompt=conf.system_prompt, run_commands=conf.run_commands, image_dir=conf.image_dir)
     browser = GeminiBrowser(conf.profile_path, conf.headless)
     session = _build_session()
 
@@ -325,7 +379,7 @@ async def run():
                     # fall through to message sending
                 elif result and result.startswith("__image__:"):
                     img_prompt = result[len("__image__:"):]
-                    img_dir = state.cwd / "gemini-images"
+                    img_dir = _image_dir(state)
                     await _send_and_get_images(browser, img_prompt, img_dir)
                     continue
                 elif result and result.startswith("__batch__:"):
@@ -388,7 +442,7 @@ async def run():
                 console.print(Markdown(response_text))
 
             # Check for generated images
-            await _extract_and_save_images(browser, state.cwd / "gemini-images")
+            await _extract_and_save_images(browser, _image_dir(state))
 
             # In edit mode: detect and apply diffs
             if state.edit_mode and response_text:

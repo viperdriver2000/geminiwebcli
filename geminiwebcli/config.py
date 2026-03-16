@@ -11,6 +11,7 @@ DEFAULTS = {
     "profile_dir": str(PROFILE_DIR),
     "headless": False,
     "model": "gemini-2.0-flash",
+    "image_dir": "gemini-images",
     "system_prompt": "IMPORTANT: Write all code, variable names, and comments in English. Write all explanations and prose in German. Be concise: do not add unsolicited commentary, explanations, or prose. Only do what is explicitly requested.",
     "telegram_token": "",
     "telegram_chat_id": "",
@@ -22,6 +23,7 @@ class Config:
     profile_dir: str = str(PROFILE_DIR)
     headless: bool = True
     model: str = "gemini-2.0-flash"
+    image_dir: str = "gemini-images"
     system_prompt: str = DEFAULTS["system_prompt"]
     telegram_token: str = ""
     telegram_chat_id: str = ""
@@ -30,6 +32,11 @@ class Config:
     @property
     def profile_path(self) -> Path:
         return Path(self.profile_dir).expanduser()
+
+    @property
+    def image_path(self) -> Path:
+        p = Path(self.image_dir).expanduser()
+        return p if p.is_absolute() else Path.cwd() / p
 
 
 def load() -> Config:
@@ -48,6 +55,7 @@ def _write_defaults():
         f'profile_dir = "{DEFAULTS["profile_dir"]}"',
         f'headless = {str(DEFAULTS["headless"]).lower()}',
         f'model = "{DEFAULTS["model"]}"',
+        f'image_dir = "{DEFAULTS["image_dir"]}"',
         f'system_prompt = "{DEFAULTS["system_prompt"]}"',
         f'# telegram_token = "1234:AAxx..."',
         f'# telegram_chat_id = "155463840"',

@@ -26,6 +26,7 @@ class SessionState:
     post_apply_plan_reset: bool = False  # /apply: return to PLAN after patching
     auto_apply_patch: bool = False       # /apply -y: skip confirmation
     run_commands: dict = field(default_factory=dict)  # allowed /run aliases
+    image_dir: str = "gemini-images"                   # output dir for images
 
 
 COMMANDS = {}
@@ -191,8 +192,9 @@ async def cmd_help(args, state: SessionState, browser) -> str:
         "/apply [-y]":               "EDIT → 'write me a patch!' → apply → PLAN (-y: auto-yes)",
         "/ref <image-path>":         "Upload reference image for next message",
         "/image <prompt>":           "Send prompt and save generated images",
+        "/gallery":                  "List all saved images",
         "/save-images":              "Save all images from current chat history",
-        "/batch <file> [opts]":      "Batch image gen (--dry-run, --start-at, --resume, --retries N)",
+        "/batch <file> [opts]":      "Batch (--dry-run, --start-at, --resume, --retries, --model)",
         "/git <args>":               "Run git command + reload context",
         "/run [key]":                "Run allowed command by key (no key = list all)",
         "/clear":                    "New conversation + reload context",
@@ -230,6 +232,42 @@ async def cmd_ref(args, state: SessionState, browser) -> str:
         return f"Upload failed: {e}"
 
 
+@command("gallery")
+async def cmd_gallery(args, state: SessionState, browser) -> str:
+    """List saved images."""
+    img_base = Path(state.image_dir) if Path(state.image_dir).is_absolute() else state.cwd / state.image_dir
+    if not img_base.exists():
+        return f"No images directory found: {img_base}"
+    # Collect all image files
+    images = sorted(
+        f for f in img_base.rglob("*")
+        if f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp") and not f.name.startswith(".")
+    )
+    if not images:
+        return "No images found."
+    # Group by subdirectory
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for img in images:
+        try:
+            rel = img.relative_to(img_base)
+            group = str(rel.parent) if rel.parent != Path(".") else "(root)"
+        except ValueError:
+            group = "(root)"
+        groups[group].append(img)
+    lines = [f"Images in {img_base}:", ""]
+    total_size = 0
+    for group, files in sorted(groups.items()):
+        lines.append(f"  [bold]{group}/[/bold]" if group != "(root)" else "  [bold](root)[/bold]")
+        for f in files:
+            size = f.stat().st_size
+            total_size += size
+            size_str = f"{size / 1024:.0f}K" if size < 1024 * 1024 else f"{size / 1024 / 1024:.1f}M"
+            lines.append(f"    {f.name:<40} {size_str:>8}")
+    lines.append(f"\n  {len(images)} images, {total_size / 1024 / 1024:.1f}M total")
+    return "\n".join(lines)
+
+
 @command("save-images")
 async def cmd_save_images(args, state: SessionState, browser) -> str:
     """Extract and save all images from the current chat history."""
@@ -240,7 +278,7 @@ async def cmd_save_images(args, state: SessionState, browser) -> str:
 async def cmd_batch(args, state: SessionState, browser) -> str:
     """Parse a prompt file and run batch image generation."""
     if not args:
-        return "Usage: /batch <file.md> [--dry-run] [--start-at <name>] [--resume] [--retries N]"
+        return "Usage: /batch <file.md> [--dry-run] [--start-at <name>] [--resume] [--retries N] [--model <name>]"
     filepath = args[0]
     dry_run = "--dry-run" in args
     start_at = None
@@ -275,7 +313,8 @@ async def cmd_batch(args, state: SessionState, browser) -> str:
         # Check progress file
         import json
         subdir = Path(filepath).stem
-        progress_file = state.cwd / "gemini-images" / subdir / ".batch-progress.json"
+        img_base = Path(state.image_dir) if Path(state.image_dir).is_absolute() else state.cwd / state.image_dir
+        progress_file = img_base / subdir / ".batch-progress.json"
         done = []
         if progress_file.exists():
             prog = json.loads(progress_file.read_text())

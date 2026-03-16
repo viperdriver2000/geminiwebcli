@@ -9,6 +9,7 @@ class BatchPrompt:
     filename: str
     prompt: str
     note: str = ""
+    ref_image: str = ""   # optional reference image path
 
 
 @dataclass
@@ -68,16 +69,21 @@ def parse_prompt_file(path: Path) -> BatchFile:
     # Find all ### headers with filenames, then their code blocks
     current_filename = ""
     current_note = ""
+    current_ref = ""
     in_header_section = False
 
     i = first_prompt_line
     while i < len(lines):
         line = lines[i]
 
-        # Match ### headers with image filenames
-        header_match = re.match(r"^###\s+(\S+\.(?:png|jpg|jpeg|webp))", line, re.IGNORECASE)
+        # Match ### headers with image filenames, optional [ref: path]
+        header_match = re.match(
+            r"^###\s+(\S+\.(?:png|jpg|jpeg|webp))(?:\s+\[ref:\s*(.+?)\])?",
+            line, re.IGNORECASE
+        )
         if header_match:
             current_filename = header_match.group(1)
+            current_ref = header_match.group(2) or ""
             current_note = ""
             in_header_section = True
             i += 1
@@ -104,9 +110,11 @@ def parse_prompt_file(path: Path) -> BatchFile:
                     filename=current_filename,
                     prompt=prompt_text,
                     note=current_note,
+                    ref_image=current_ref,
                 ))
             current_filename = ""
             current_note = ""
+            current_ref = ""
             in_header_section = False
             i += 1
             continue
