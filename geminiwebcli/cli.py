@@ -141,6 +141,21 @@ async def _save_all_images(browser, state):
     console.print(f"\n[bold green]{total} images saved from {len(all_images)} responses.[/bold green]")
 
 
+def _load_batch_progress(progress_file: Path) -> dict:
+    """Load batch progress from JSON file."""
+    import json
+    if progress_file.exists():
+        return json.loads(progress_file.read_text())
+    return {"done": [], "failed": []}
+
+
+def _save_batch_progress(progress_file: Path, progress: dict):
+    """Save batch progress to JSON file."""
+    import json
+    progress_file.parent.mkdir(parents=True, exist_ok=True)
+    progress_file.write_text(json.dumps(progress, indent=2))
+
+
 async def _run_batch(browser, state, filepath: str, raw_input: str):
     """Run batch image generation from a prompt file."""
     from geminiwebcli.batch import parse_prompt_file
@@ -148,39 +163,58 @@ async def _run_batch(browser, state, filepath: str, raw_input: str):
     batch = parse_prompt_file(p)
     prompts = batch.prompts
 
-    # Parse --start-at from original input
+    # Parse options from original input
     parts = raw_input.strip().split()
     start_at = None
+    resume = "--resume" in parts
+    max_retries = 1
     if "--start-at" in parts:
         idx = parts.index("--start-at")
         if idx + 1 < len(parts):
             start_at = parts[idx + 1]
+    if "--retries" in parts:
+        idx = parts.index("--retries")
+        if idx + 1 < len(parts):
+            max_retries = int(parts[idx + 1])
+
+    # Sub-directory named after the prompt file
+    subdir = Path(filepath).stem
+    img_dir = state.cwd / "gemini-images" / subdir
+    progress_file = img_dir / ".batch-progress.json"
+    progress = _load_batch_progress(progress_file)
+
+    # --resume: skip already completed prompts
+    if resume and progress["done"]:
+        done_set = set(progress["done"])
+        skipped = [pr for pr in prompts if pr.filename in done_set]
+        prompts = [pr for pr in prompts if pr.filename not in done_set]
+        if skipped:
+            console.print(f"[dim]Resuming: skipping {len(skipped)} already completed prompts[/dim]")
+        # Also retry previously failed ones
+        if progress["failed"]:
+            console.print(f"[dim]Will retry {len(progress['failed'])} previously failed prompts[/dim]")
+
+    # --start-at: manual jump
     if start_at:
         for i, pr in enumerate(prompts):
             if start_at in pr.filename:
                 prompts = prompts[i:]
                 break
 
-    # Sub-directory named after the prompt file (e.g. bild-prompts-v2 → gemini-images/bild-prompts-v2/)
-    subdir = Path(filepath).stem
-    img_dir = state.cwd / "gemini-images" / subdir
     total = len(prompts)
     failed = []
 
     console.print(f"\n[bold]Batch: {total} prompts[/bold]")
     console.print(f"[bold]Intro: {len(batch.intro)} chars (included in each prompt)[/bold]")
-    console.print(f"[bold]Output: {img_dir}[/bold]\n")
+    console.print(f"[bold]Output: {img_dir}[/bold]")
+    console.print(f"[bold]Retries: {max_retries}[/bold]\n")
 
     for n, pr in enumerate(prompts, 1):
         console.print(f"\n[bold yellow]━━━ [{n}/{total}] {pr.filename} ━━━[/bold yellow]")
         if pr.note:
             console.print(f"[dim]Note: {pr.note}[/dim]")
 
-        # Fresh chat for each image
-        await browser.new_chat()
-        await asyncio.sleep(1)
-
-        # Single message: intro context + image prompt together
+        # Build prompt
         if batch.intro:
             full_prompt = (
                 f"{batch.intro}\n\n"
@@ -192,15 +226,37 @@ async def _run_batch(browser, state, filepath: str, raw_input: str):
         else:
             full_prompt = pr.prompt
 
-        saved = await _send_and_get_images(browser, full_prompt, img_dir, pr.filename)
-        if not saved:
+        # Try with retries
+        saved = []
+        for attempt in range(1, max_retries + 1):
+            await browser.new_chat()
+            await asyncio.sleep(1)
+
+            if attempt > 1:
+                console.print(f"[dim]Retry {attempt}/{max_retries}...[/dim]")
+
+            saved = await _send_and_get_images(browser, full_prompt, img_dir, pr.filename)
+            if saved:
+                break
+
+        if saved:
+            progress["done"].append(pr.filename)
+            if pr.filename in progress["failed"]:
+                progress["failed"].remove(pr.filename)
+        else:
             console.print(f"[bold red]No images extracted for {pr.filename}[/bold red]")
             failed.append(pr.filename)
+            if pr.filename not in progress["failed"]:
+                progress["failed"].append(pr.filename)
+
+        # Save progress after each prompt
+        _save_batch_progress(progress_file, progress)
 
     # Summary
     console.print(f"\n[bold green]━━━ Batch complete: {total - len(failed)}/{total} successful ━━━[/bold green]")
     if failed:
         console.print(f"[bold red]Failed: {', '.join(failed)}[/bold red]")
+        console.print(f"[dim]Run with --resume to retry failed prompts[/dim]")
 
 
 async def run():

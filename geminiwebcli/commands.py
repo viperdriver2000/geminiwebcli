@@ -192,7 +192,7 @@ async def cmd_help(args, state: SessionState, browser) -> str:
         "/ref <image-path>":         "Upload reference image for next message",
         "/image <prompt>":           "Send prompt and save generated images",
         "/save-images":              "Save all images from current chat history",
-        "/batch <file.md> [opts]":   "Batch image gen from prompt file (--dry-run, --start-at)",
+        "/batch <file> [opts]":      "Batch image gen (--dry-run, --start-at, --resume, --retries N)",
         "/git <args>":               "Run git command + reload context",
         "/run [key]":                "Run allowed command by key (no key = list all)",
         "/clear":                    "New conversation + reload context",
@@ -240,7 +240,7 @@ async def cmd_save_images(args, state: SessionState, browser) -> str:
 async def cmd_batch(args, state: SessionState, browser) -> str:
     """Parse a prompt file and run batch image generation."""
     if not args:
-        return "Usage: /batch <file.md> [--dry-run] [--start-at <name>]"
+        return "Usage: /batch <file.md> [--dry-run] [--start-at <name>] [--resume] [--retries N]"
     filepath = args[0]
     dry_run = "--dry-run" in args
     start_at = None
@@ -272,10 +272,27 @@ async def cmd_batch(args, state: SessionState, browser) -> str:
             return f"Start-at '{start_at}' not found. Available: {', '.join(p.filename for p in prompts)}"
 
     if dry_run:
+        # Check progress file
+        import json
+        subdir = Path(filepath).stem
+        progress_file = state.cwd / "gemini-images" / subdir / ".batch-progress.json"
+        done = []
+        if progress_file.exists():
+            prog = json.loads(progress_file.read_text())
+            done = prog.get("done", [])
+            failed = prog.get("failed", [])
+
         lines = [f"Intro: {len(batch.intro)} chars", f"Style prefix: {len(batch.style_prefix)} chars", f"Prompts: {len(prompts)}", ""]
         for i, pr in enumerate(prompts, 1):
             note = f" ({pr.note})" if pr.note else ""
-            lines.append(f"  {i:>2}. {pr.filename}{note}")
+            status = ""
+            if pr.filename in done:
+                status = " [green]DONE[/green]"
+            elif failed and pr.filename in failed:
+                status = " [red]FAILED[/red]"
+            lines.append(f"  {i:>2}. {pr.filename}{note}{status}")
+        if done:
+            lines.append(f"\n  {len(done)}/{len(prompts)} completed. Use --resume to skip done.")
         return "\n".join(lines)
 
     # Return batch data for cli.py to process
