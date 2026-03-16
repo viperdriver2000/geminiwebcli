@@ -122,7 +122,8 @@ async def _run_batch(browser, state, filepath: str, raw_input: str):
     """Run batch image generation from a prompt file."""
     from geminiwebcli.batch import parse_prompt_file
     p = Path(filepath).expanduser()
-    style_prefix, prompts = parse_prompt_file(p)
+    batch = parse_prompt_file(p)
+    prompts = batch.prompts
 
     # Parse --start-at from original input
     parts = raw_input.strip().split()
@@ -141,22 +142,37 @@ async def _run_batch(browser, state, filepath: str, raw_input: str):
     total = len(prompts)
     failed = []
 
-    console.print(f"\n[bold]Batch: {total} prompts, style prefix: {len(style_prefix)} chars[/bold]")
+    console.print(f"\n[bold]Batch: {total} prompts[/bold]")
+    console.print(f"[bold]Intro: {len(batch.intro)} chars (sent as context per chat)[/bold]")
     console.print(f"[bold]Output: {img_dir}[/bold]\n")
+
+    BATCH_PRIME = (
+        "Study these character descriptions and style guidelines carefully. "
+        "You will generate images based on these. Reply with just 'OK'."
+    )
 
     for n, pr in enumerate(prompts, 1):
         console.print(f"\n[bold yellow]━━━ [{n}/{total}] {pr.filename} ━━━[/bold yellow]")
         if pr.note:
             console.print(f"[dim]Note: {pr.note}[/dim]")
 
-        # Fresh chat for each prompt
+        # Fresh chat for each image
         await browser.new_chat()
         await asyncio.sleep(1)
 
-        # Combine style prefix + prompt
-        full_prompt = f"{style_prefix}\n\n{pr.prompt}" if style_prefix else pr.prompt
+        # Step 1: Prime with intro (characters, style, rules)
+        if batch.intro:
+            console.print("[dim]Sending intro context...[/dim]")
+            try:
+                await browser.send_message(f"{batch.intro}\n\n{BATCH_PRIME}")
+                async for _ in browser.stream_response():
+                    pass  # discard ACK
+            except Exception:
+                console.print("[bold red]Browser closed.[/bold red]")
+                break
 
-        saved = await _send_and_get_images(browser, full_prompt, img_dir, pr.filename)
+        # Step 2: Send the actual image prompt
+        saved = await _send_and_get_images(browser, pr.prompt, img_dir, pr.filename)
         if not saved:
             console.print(f"[bold red]No images extracted for {pr.filename}[/bold red]")
             failed.append(pr.filename)

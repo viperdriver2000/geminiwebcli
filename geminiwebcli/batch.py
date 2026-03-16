@@ -11,21 +11,54 @@ class BatchPrompt:
     note: str = ""
 
 
-def parse_prompt_file(path: Path) -> tuple[str, list[BatchPrompt]]:
+@dataclass
+class BatchFile:
+    intro: str              # Full intro text (everything before first ### prompt)
+    style_prefix: str       # First code block (also part of intro)
+    prompts: list[BatchPrompt]
+
+
+def parse_prompt_file(path: Path) -> BatchFile:
     """Parse a markdown prompt file.
 
     Expected format:
-    - First code block = style prefix (prepended to every prompt)
+    - Everything before the first ### image header = intro (sent as context)
+    - First code block within intro = style prefix (also prepended to each prompt)
     - ### filename.png headers followed by code blocks = individual prompts
     - Optional blockquote lines before a code block = notes
 
-    Returns (style_prefix, list of BatchPrompt).
+    Returns BatchFile with intro, style_prefix, and prompts.
     """
     text = path.read_text()
     lines = text.split("\n")
 
     style_prefix = ""
     prompts: list[BatchPrompt] = []
+
+    # Find where the first image-related section starts
+    # (the ## heading that contains the first ### image header)
+    first_prompt_line = len(lines)
+    for idx, line in enumerate(lines):
+        if re.match(r"^###\s+\S+\.(?:png|jpg|jpeg|webp)", line, re.IGNORECASE):
+            first_prompt_line = idx
+            break
+
+    # Walk back past the ### header to find the parent ## section header
+    intro_end = first_prompt_line
+    for idx in range(first_prompt_line - 1, -1, -1):
+        line = lines[idx].strip()
+        if line.startswith("## "):
+            intro_end = idx
+            break
+        elif line and line != "---":
+            # Non-empty, non-separator line = end of intro content
+            intro_end = idx + 1
+            break
+
+    # Strip trailing empty lines and separators
+    while intro_end > 0 and lines[intro_end - 1].strip() in ("", "---"):
+        intro_end -= 1
+    intro = "\n".join(lines[:intro_end]).strip()
 
     # Extract first code block as style prefix
     first_block = re.search(r"^```\w*\n(.*?)^```", text, re.MULTILINE | re.DOTALL)
@@ -37,7 +70,7 @@ def parse_prompt_file(path: Path) -> tuple[str, list[BatchPrompt]]:
     current_note = ""
     in_header_section = False
 
-    i = 0
+    i = first_prompt_line
     while i < len(lines):
         line = lines[i]
 
@@ -66,8 +99,7 @@ def parse_prompt_file(path: Path) -> tuple[str, list[BatchPrompt]]:
                 i += 1
             prompt_text = "\n".join(block_lines).strip()
 
-            # Skip if this is the style prefix block (first one, no filename)
-            if current_filename and prompt_text != style_prefix:
+            if current_filename:
                 prompts.append(BatchPrompt(
                     filename=current_filename,
                     prompt=prompt_text,
@@ -85,4 +117,4 @@ def parse_prompt_file(path: Path) -> tuple[str, list[BatchPrompt]]:
 
         i += 1
 
-    return style_prefix, prompts
+    return BatchFile(intro=intro, style_prefix=style_prefix, prompts=prompts)

@@ -228,10 +228,11 @@ async def cmd_batch(args, state: SessionState, browser) -> str:
     if not p.exists():
         return f"File not found: {filepath}"
     try:
-        style_prefix, prompts = parse_prompt_file(p)
+        batch = parse_prompt_file(p)
     except Exception as e:
         return f"Parse error: {e}"
 
+    prompts = batch.prompts
     if not prompts:
         return "No prompts found in file."
 
@@ -246,7 +247,7 @@ async def cmd_batch(args, state: SessionState, browser) -> str:
             return f"Start-at '{start_at}' not found. Available: {', '.join(p.filename for p in prompts)}"
 
     if dry_run:
-        lines = [f"Style prefix: {len(style_prefix)} chars", f"Prompts: {len(prompts)}", ""]
+        lines = [f"Intro: {len(batch.intro)} chars", f"Style prefix: {len(batch.style_prefix)} chars", f"Prompts: {len(prompts)}", ""]
         for i, pr in enumerate(prompts, 1):
             note = f" ({pr.note})" if pr.note else ""
             lines.append(f"  {i:>2}. {pr.filename}{note}")
