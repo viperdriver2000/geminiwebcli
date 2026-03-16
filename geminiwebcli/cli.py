@@ -161,7 +161,9 @@ async def _run_batch(browser, state, filepath: str, raw_input: str):
         if batch.intro:
             full_prompt = (
                 f"{batch.intro}\n\n"
-                f"Now generate this image based on the characters and style above:\n\n"
+                f"Now generate this image based on the characters and style above.\n"
+                f"CRITICAL: The image must contain absolutely NO text, NO labels, NO names, "
+                f"NO captions, NO speech bubbles, and NO written words of any kind.\n\n"
                 f"{pr.prompt}"
             )
         else:
