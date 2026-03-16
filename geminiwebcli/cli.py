@@ -145,13 +145,8 @@ async def _run_batch(browser, state, filepath: str, raw_input: str):
     failed = []
 
     console.print(f"\n[bold]Batch: {total} prompts[/bold]")
-    console.print(f"[bold]Intro: {len(batch.intro)} chars (sent as context per chat)[/bold]")
+    console.print(f"[bold]Intro: {len(batch.intro)} chars (included in each prompt)[/bold]")
     console.print(f"[bold]Output: {img_dir}[/bold]\n")
-
-    BATCH_PRIME = (
-        "Study these character descriptions and style guidelines carefully. "
-        "You will generate images based on these. Reply with just 'OK'."
-    )
 
     for n, pr in enumerate(prompts, 1):
         console.print(f"\n[bold yellow]━━━ [{n}/{total}] {pr.filename} ━━━[/bold yellow]")
@@ -162,19 +157,17 @@ async def _run_batch(browser, state, filepath: str, raw_input: str):
         await browser.new_chat()
         await asyncio.sleep(1)
 
-        # Step 1: Prime with intro (characters, style, rules)
+        # Single message: intro context + image prompt together
         if batch.intro:
-            console.print("[dim]Sending intro context...[/dim]")
-            try:
-                await browser.send_message(f"{batch.intro}\n\n{BATCH_PRIME}")
-                async for _ in browser.stream_response():
-                    pass  # discard ACK
-            except Exception:
-                console.print("[bold red]Browser closed.[/bold red]")
-                break
+            full_prompt = (
+                f"{batch.intro}\n\n"
+                f"Now generate this image based on the characters and style above:\n\n"
+                f"{pr.prompt}"
+            )
+        else:
+            full_prompt = pr.prompt
 
-        # Step 2: Send the actual image prompt
-        saved = await _send_and_get_images(browser, pr.prompt, img_dir, pr.filename)
+        saved = await _send_and_get_images(browser, full_prompt, img_dir, pr.filename)
         if not saved:
             console.print(f"[bold red]No images extracted for {pr.filename}[/bold red]")
             failed.append(pr.filename)
