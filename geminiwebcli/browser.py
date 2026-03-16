@@ -193,7 +193,7 @@ class GeminiBrowser:
             last_el,
         )
         dl_buttons = await parent.query_selector_all(
-            'button[aria-label="Bild in Originalgröße herunterladen"]'
+            'button[aria-label*="ownload"], button[aria-label*="erunterladen"], button[aria-label*="riginal"]'
         )
         for btn in dl_buttons:
             try:
@@ -216,6 +216,25 @@ class GeminiBrowser:
                 except Exception:
                     pass
         return results
+
+    async def upload_image(self, image_path: Path):
+        """Upload an image file via the Gemini file input."""
+        await self._page.wait_for_selector("input-area-v2", timeout=30000)
+        # Gemini uses a hidden file input; find it and set the file
+        file_input = await self._page.query_selector('input[type="file"]')
+        if not file_input:
+            # Try clicking the attachment button to reveal the file input
+            attach_btn = await self._page.query_selector(
+                'button[aria-label*="nhang"], button[aria-label*="ttach"], button[aria-label*="pload"], button[aria-label*="datei"]'
+            )
+            if attach_btn:
+                await attach_btn.click()
+                await asyncio.sleep(0.5)
+            file_input = await self._page.query_selector('input[type="file"]')
+        if not file_input:
+            raise RuntimeError("Could not find file input element on Gemini page")
+        await file_input.set_input_files(str(image_path))
+        await asyncio.sleep(1)  # wait for upload to process
 
     async def _open_model_picker(self) -> dict[str, str]:
         """Open model picker, return {mode_id: display_name} for all options."""

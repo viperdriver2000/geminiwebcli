@@ -7,6 +7,7 @@ from typing import Callable
 from rich.console import Console
 from rich.panel import Panel
 from geminiwebcli import context as ctx
+from geminiwebcli.batch import parse_prompt_file
 
 BLOCKED_BRANCHES = {"master", "main", "qa", "devel"}
 _console = Console()
@@ -188,8 +189,10 @@ async def cmd_help(args, state: SessionState, browser) -> str:
         "/edit":                     "Enable edit mode (apply diffs from responses)",
         "/plan":                     "Disable edit mode (keep context)",
         "/apply [-y]":               "EDIT → 'write me a patch!' → apply → PLAN (-y: auto-yes)",
+        "/image <prompt>":           "Send prompt and save generated images",
+        "/batch <file.md> [opts]":   "Batch image gen from prompt file (--dry-run, --start-at)",
         "/git <args>":               "Run git command + reload context",
-        "/run [key]":                 "Run allowed command by key (no key = list all)",
+        "/run [key]":                "Run allowed command by key (no key = list all)",
         "/clear":                    "New conversation + reload context",
         "/history":                  "Show context summary",
         "/model [name]":             "Show or set model",
@@ -198,6 +201,59 @@ async def cmd_help(args, state: SessionState, browser) -> str:
         "/exit":                     "Quit",
     }
     return "\n".join(f"  {k:<30} {v}" for k, v in cmds.items())
+
+
+@command("image")
+async def cmd_image(args, state: SessionState, browser) -> str:
+    """Send a prompt and extract generated images."""
+    if not args:
+        return "Usage: /image <prompt text>\n  Sends the prompt and saves any generated images."
+    return "__image__:" + " ".join(args)
+
+
+@command("batch")
+async def cmd_batch(args, state: SessionState, browser) -> str:
+    """Parse a prompt file and run batch image generation."""
+    if not args:
+        return "Usage: /batch <file.md> [--dry-run] [--start-at <name>]"
+    filepath = args[0]
+    dry_run = "--dry-run" in args
+    start_at = None
+    if "--start-at" in args:
+        idx = args.index("--start-at")
+        if idx + 1 < len(args):
+            start_at = args[idx + 1]
+
+    p = Path(filepath).expanduser()
+    if not p.exists():
+        return f"File not found: {filepath}"
+    try:
+        style_prefix, prompts = parse_prompt_file(p)
+    except Exception as e:
+        return f"Parse error: {e}"
+
+    if not prompts:
+        return "No prompts found in file."
+
+    if start_at:
+        found = False
+        for i, pr in enumerate(prompts):
+            if start_at in pr.filename:
+                prompts = prompts[i:]
+                found = True
+                break
+        if not found:
+            return f"Start-at '{start_at}' not found. Available: {', '.join(p.filename for p in prompts)}"
+
+    if dry_run:
+        lines = [f"Style prefix: {len(style_prefix)} chars", f"Prompts: {len(prompts)}", ""]
+        for i, pr in enumerate(prompts, 1):
+            note = f" ({pr.note})" if pr.note else ""
+            lines.append(f"  {i:>2}. {pr.filename}{note}")
+        return "\n".join(lines)
+
+    # Return batch data for cli.py to process
+    return f"__batch__:{filepath}"
 
 
 @command("exit")

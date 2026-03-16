@@ -19,8 +19,8 @@ from geminiwebcli.patch import extract_diffs, normalize_diff, apply_diff
 
 HISTORY_FILE = Path.home() / ".geminiwebcli" / "history"
 SLASH_COMMANDS = [
-    "/upload", "/edit", "/plan", "/apply", "/git", "/run", "/clear",
-    "/history", "/model", "/paste", "/help", "/exit",
+    "/upload", "/edit", "/plan", "/apply", "/image", "/batch",
+    "/git", "/run", "/clear", "/history", "/model", "/paste", "/help", "/exit",
 ]
 
 EDIT_INSTRUCTION = (
@@ -44,6 +44,48 @@ PLAN_INSTRUCTION = (
 PRIME_INSTRUCTION = "Study this project context carefully. When done, reply with just 'OK'."
 
 console = Console()
+
+
+async def _extract_and_save_images(browser, output_dir: Path, filename_prefix: str = "") -> list[Path]:
+    """Extract images from last response and save them. Returns list of saved paths."""
+    from time import strftime
+    await asyncio.sleep(2)
+    images = await browser.extract_images()
+    if not images:
+        return []
+    output_dir.mkdir(exist_ok=True)
+    saved = []
+    ts = strftime("%Y%m%d-%H%M%S")
+    for i, img_data in enumerate(images, 1):
+        suffix = ".png" if img_data[:4] == b'\x89PNG' else ".jpg"
+        if filename_prefix:
+            # Use the provided filename, strip existing extension
+            base = Path(filename_prefix).stem
+            name = f"{base}{suffix}" if len(images) == 1 else f"{base}-{i}{suffix}"
+        else:
+            name = f"{ts}-{i}{suffix}"
+        fname = output_dir / name
+        fname.write_bytes(img_data)
+        console.print(f"[bold cyan]Image saved:[/bold cyan] {fname}")
+        saved.append(fname)
+    return saved
+
+
+async def _send_and_get_images(browser, message: str, output_dir: Path, filename: str = "") -> list[Path]:
+    """Send a message, stream response, extract and save images."""
+    try:
+        await browser.send_message(message)
+    except Exception:
+        console.print("[bold red]Browser closed.[/bold red]")
+        return []
+    response_text = ""
+    with Live(console=console, refresh_per_second=8, transient=True) as live:
+        async for text in browser.stream_response():
+            response_text = text
+            live.update(Markdown(text))
+    if response_text:
+        console.print(Markdown(response_text))
+    return await _extract_and_save_images(browser, output_dir, filename)
 
 
 def _build_session() -> PromptSession:
@@ -74,6 +116,55 @@ async def _paste_mode() -> str:
     except EOFError:
         pass
     return "\n".join(lines)
+
+
+async def _run_batch(browser, state, filepath: str, raw_input: str):
+    """Run batch image generation from a prompt file."""
+    from geminiwebcli.batch import parse_prompt_file
+    p = Path(filepath).expanduser()
+    style_prefix, prompts = parse_prompt_file(p)
+
+    # Parse --start-at from original input
+    parts = raw_input.strip().split()
+    start_at = None
+    if "--start-at" in parts:
+        idx = parts.index("--start-at")
+        if idx + 1 < len(parts):
+            start_at = parts[idx + 1]
+    if start_at:
+        for i, pr in enumerate(prompts):
+            if start_at in pr.filename:
+                prompts = prompts[i:]
+                break
+
+    img_dir = state.cwd / "gemini-images"
+    total = len(prompts)
+    failed = []
+
+    console.print(f"\n[bold]Batch: {total} prompts, style prefix: {len(style_prefix)} chars[/bold]")
+    console.print(f"[bold]Output: {img_dir}[/bold]\n")
+
+    for n, pr in enumerate(prompts, 1):
+        console.print(f"\n[bold yellow]━━━ [{n}/{total}] {pr.filename} ━━━[/bold yellow]")
+        if pr.note:
+            console.print(f"[dim]Note: {pr.note}[/dim]")
+
+        # Fresh chat for each prompt
+        await browser.new_chat()
+        await asyncio.sleep(1)
+
+        # Combine style prefix + prompt
+        full_prompt = f"{style_prefix}\n\n{pr.prompt}" if style_prefix else pr.prompt
+
+        saved = await _send_and_get_images(browser, full_prompt, img_dir, pr.filename)
+        if not saved:
+            console.print(f"[bold red]No images extracted for {pr.filename}[/bold red]")
+            failed.append(pr.filename)
+
+    # Summary
+    console.print(f"\n[bold green]━━━ Batch complete: {total - len(failed)}/{total} successful ━━━[/bold green]")
+    if failed:
+        console.print(f"[bold red]Failed: {', '.join(failed)}[/bold red]")
 
 
 async def run():
@@ -140,6 +231,15 @@ async def run():
                 elif result == "__apply__":
                     user_input = "write me a patch!"
                     # fall through to message sending
+                elif result and result.startswith("__image__:"):
+                    img_prompt = result[len("__image__:"):]
+                    img_dir = state.cwd / "gemini-images"
+                    await _send_and_get_images(browser, img_prompt, img_dir)
+                    continue
+                elif result and result.startswith("__batch__:"):
+                    filepath = result[len("__batch__:"):]
+                    await _run_batch(browser, state, filepath, user_input)
+                    continue
                 else:
                     if result:
                         console.print(result)
@@ -192,19 +292,8 @@ async def run():
             if response_text:
                 console.print(Markdown(response_text))
 
-            # Check for generated images (wait a bit for images to render)
-            await asyncio.sleep(2)
-            images = await browser.extract_images()
-            if images:
-                img_dir = state.cwd / "gemini-images"
-                img_dir.mkdir(exist_ok=True)
-                from time import strftime
-                ts = strftime("%Y%m%d-%H%M%S")
-                for i, img_data in enumerate(images, 1):
-                    suffix = ".png" if img_data[:4] == b'\x89PNG' else ".jpg"
-                    fname = img_dir / f"{ts}-{i}{suffix}"
-                    fname.write_bytes(img_data)
-                    console.print(f"[bold cyan]Image saved:[/bold cyan] {fname}")
+            # Check for generated images
+            await _extract_and_save_images(browser, state.cwd / "gemini-images")
 
             # In edit mode: detect and apply diffs
             if state.edit_mode and response_text:
