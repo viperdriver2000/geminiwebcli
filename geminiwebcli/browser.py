@@ -174,8 +174,10 @@ class GeminiBrowser:
         els = await self._page.query_selector_all("message-content")
         if not els:
             return []
-        last_el = els[-1]
-        # Find all non-trivial img elements
+        return await self._extract_images_from_element(els[-1])
+
+    async def _extract_images_from_element(self, el) -> list[bytes]:
+        """Extract images from a single response element."""
         img_urls = await self._page.evaluate("""(el) => {
             const urls = [];
             for (const img of el.querySelectorAll('img')) {
@@ -183,14 +185,14 @@ class GeminiBrowser:
                     urls.push(img.src);
             }
             return urls;
-        }""", last_el)
+        }""", el)
         if not img_urls:
             return []
-        # Try full-res download via "Bild in Originalgröße herunterladen" button
+        # Try download buttons
         results = []
         parent = await self._page.evaluate_handle(
             "(el) => el.closest('model-response') || el.parentElement?.parentElement || el",
-            last_el,
+            el,
         )
         dl_buttons = await parent.query_selector_all(
             'button[aria-label*="ownload"], button[aria-label*="erunterladen"], button[aria-label*="riginal"]'
@@ -204,7 +206,7 @@ class GeminiBrowser:
                 if path:
                     results.append(Path(path).read_bytes())
                     await download.delete()
-            except Exception as e:
+            except Exception:
                 pass
         # Fallback: fetch preview images
         if not results:
@@ -215,6 +217,18 @@ class GeminiBrowser:
                         results.append(await resp.body())
                 except Exception:
                     pass
+        return results
+
+    async def extract_all_images(self) -> list[tuple[int, list[bytes]]]:
+        """Extract images from ALL responses. Returns [(response_index, [image_bytes])]."""
+        els = await self._page.query_selector_all("message-content")
+        results = []
+        for i, el in enumerate(els):
+            count = await self._count_images(el)
+            if count > 0:
+                images = await self._extract_images_from_element(el)
+                if images:
+                    results.append((i, images))
         return results
 
     async def upload_image(self, image_path: Path):

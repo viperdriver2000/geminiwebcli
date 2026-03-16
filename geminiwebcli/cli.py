@@ -20,7 +20,7 @@ from geminiwebcli.patch import extract_diffs, normalize_diff, apply_diff
 HISTORY_FILE = Path.home() / ".geminiwebcli" / "history"
 SLASH_COMMANDS = [
     "/upload", "/ref", "/edit", "/plan", "/apply", "/image", "/batch",
-    "/git", "/run", "/clear", "/history", "/model", "/paste", "/help", "/exit",
+    "/save-images", "/git", "/run", "/clear", "/history", "/model", "/paste", "/help", "/exit",
 ]
 
 EDIT_INSTRUCTION = (
@@ -116,6 +116,29 @@ async def _paste_mode() -> str:
     except EOFError:
         pass
     return "\n".join(lines)
+
+
+async def _save_all_images(browser, state):
+    """Extract and save all images from all responses in the current chat."""
+    from time import strftime
+    console.print("[dim]Scanning chat for images...[/dim]")
+    all_images = await browser.extract_all_images()
+    if not all_images:
+        console.print("No images found in chat history.")
+        return
+    img_dir = state.cwd / "gemini-images"
+    img_dir.mkdir(exist_ok=True)
+    ts = strftime("%Y%m%d-%H%M%S")
+    total = sum(len(imgs) for _, imgs in all_images)
+    n = 0
+    for resp_idx, images in all_images:
+        for i, img_data in enumerate(images, 1):
+            n += 1
+            suffix = ".png" if img_data[:4] == b'\x89PNG' else ".jpg"
+            fname = img_dir / f"{ts}-r{resp_idx}-{i}{suffix}"
+            fname.write_bytes(img_data)
+            console.print(f"[bold cyan]Image saved:[/bold cyan] {fname}")
+    console.print(f"\n[bold green]{total} images saved from {len(all_images)} responses.[/bold green]")
 
 
 async def _run_batch(browser, state, filepath: str, raw_input: str):
@@ -252,6 +275,9 @@ async def run():
                 elif result and result.startswith("__batch__:"):
                     filepath = result[len("__batch__:"):]
                     await _run_batch(browser, state, filepath, user_input)
+                    continue
+                elif result == "__save_images__":
+                    await _save_all_images(browser, state)
                     continue
                 else:
                     if result:

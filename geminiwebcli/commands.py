@@ -191,6 +191,7 @@ async def cmd_help(args, state: SessionState, browser) -> str:
         "/apply [-y]":               "EDIT → 'write me a patch!' → apply → PLAN (-y: auto-yes)",
         "/ref <image-path>":         "Upload reference image for next message",
         "/image <prompt>":           "Send prompt and save generated images",
+        "/save-images":              "Save all images from current chat history",
         "/batch <file.md> [opts]":   "Batch image gen from prompt file (--dry-run, --start-at)",
         "/git <args>":               "Run git command + reload context",
         "/run [key]":                "Run allowed command by key (no key = list all)",
@@ -227,6 +228,12 @@ async def cmd_ref(args, state: SessionState, browser) -> str:
         return f"Reference image uploaded: {image_path.name}\nType your message — it will be sent together with the image."
     except Exception as e:
         return f"Upload failed: {e}"
+
+
+@command("save-images")
+async def cmd_save_images(args, state: SessionState, browser) -> str:
+    """Extract and save all images from the current chat history."""
+    return "__save_images__"
 
 
 @command("batch")
