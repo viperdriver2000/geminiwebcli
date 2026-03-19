@@ -52,27 +52,51 @@ def _image_dir(state) -> Path:
     return p if p.is_absolute() else state.cwd / p
 
 
-async def _extract_and_save_images(browser, output_dir: Path, filename_prefix: str = "") -> list[Path]:
-    """Extract images from last response and save them. Returns list of saved paths."""
+async def _extract_and_save_images(browser, output_dir: Path, filename_prefix: str = "", max_retries: int = 3) -> list[Path]:
+    """Extract images from last response and save them. Returns list of saved paths.
+
+    If filename_prefix requests .png but only .jpg data is received,
+    retries extraction up to max_retries times (download button may need time).
+    """
     from time import strftime
     await asyncio.sleep(2)
-    images = await browser.extract_images()
+
+    # Determine if we expect PNG (from the filename in the prompt file)
+    expect_png = filename_prefix and Path(filename_prefix).suffix.lower() == ".png"
+
+    images = []
+    for attempt in range(max_retries):
+        images = await browser.extract_images()
+        if not images:
+            break
+        # Check if we got the expected format
+        if expect_png:
+            all_png = all(img[:4] == b'\x89PNG' for img in images)
+            if all_png:
+                break
+            # Got JPG instead of PNG — wait and retry for full-res download
+            if attempt < max_retries - 1:
+                console.print(f"[yellow]Got JPG instead of PNG, retrying download ({attempt + 2}/{max_retries})...[/yellow]")
+                await asyncio.sleep(3)
+        else:
+            break
+
     if not images:
         return []
-    output_dir.mkdir(exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     saved = []
     ts = strftime("%Y%m%d-%H%M%S")
     for i, img_data in enumerate(images, 1):
         suffix = ".png" if img_data[:4] == b'\x89PNG' else ".jpg"
         if filename_prefix:
-            # Use the provided filename, strip existing extension
             base = Path(filename_prefix).stem
             name = f"{base}{suffix}" if len(images) == 1 else f"{base}-{i}{suffix}"
         else:
             name = f"{ts}-{i}{suffix}"
         fname = output_dir / name
         fname.write_bytes(img_data)
-        console.print(f"[bold cyan]Image saved:[/bold cyan] {fname}")
+        fmt_info = "" if suffix == ".png" or not expect_png else " [yellow](SD fallback)[/yellow]"
+        console.print(f"[bold cyan]Image saved:[/bold cyan] {fname}{fmt_info}")
         saved.append(fname)
     return saved
 
