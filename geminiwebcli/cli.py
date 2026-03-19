@@ -172,6 +172,7 @@ async def _run_batch(browser, state, filepath: str, raw_input: str):
     # Parse options from original input
     parts = raw_input.strip().split()
     start_at = None
+    only = None
     resume = "--resume" in parts
     max_retries = 1
     batch_model = None
@@ -179,6 +180,10 @@ async def _run_batch(browser, state, filepath: str, raw_input: str):
         idx = parts.index("--start-at")
         if idx + 1 < len(parts):
             start_at = parts[idx + 1]
+    if "--only" in parts:
+        idx = parts.index("--only")
+        if idx + 1 < len(parts):
+            only = parts[idx + 1]
     if "--retries" in parts:
         idx = parts.index("--retries")
         if idx + 1 < len(parts):
@@ -205,8 +210,16 @@ async def _run_batch(browser, state, filepath: str, raw_input: str):
         if progress["failed"]:
             console.print(f"[dim]Will retry {len(progress['failed'])} previously failed prompts[/dim]")
 
+    # --only: single prompt
+    if only:
+        matched = [pr for pr in prompts if only in pr.filename]
+        if not matched:
+            console.print(f"[bold red]'{only}' not found. Available: {', '.join(pr.filename for pr in prompts)}[/bold red]")
+            return
+        prompts = matched
+
     # --start-at: manual jump
-    if start_at:
+    elif start_at:
         for i, pr in enumerate(prompts):
             if start_at in pr.filename:
                 prompts = prompts[i:]

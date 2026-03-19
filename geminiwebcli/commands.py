@@ -278,7 +278,7 @@ async def cmd_save_images(args, state: SessionState, browser) -> str:
 async def cmd_batch(args, state: SessionState, browser) -> str:
     """Parse a prompt file and run batch image generation."""
     if not args:
-        return "Usage: /batch <file.md> [--dry-run] [--start-at <name>] [--resume] [--retries N] [--model <name>]"
+        return "Usage: /batch <file.md> [--dry-run] [--only <name>] [--start-at <name>] [--resume] [--retries N] [--model <name>]"
     filepath = args[0]
     dry_run = "--dry-run" in args
     start_at = None
